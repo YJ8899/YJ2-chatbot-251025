@@ -70,16 +70,15 @@ def weather_icon(code: int | None, is_day: int | None):
     return "🌦️"
 
 # ---------------------------
-# 유틸: IP 기반 위치 탐지
+# 유틸: IP 기반 위치 탐지 (공인 IP 포함)
 # ---------------------------
 @st.cache_data(show_spinner=False, ttl=60 * 30)
 def detect_location_by_ip():
     """
-    클라이언트 IP 기반 대략적인 위치 탐지.
-    주의: 배포 환경에 따라 서버 IP로 감지될 수 있음.
-    실패 시 None 반환.
+    클라이언트 IP 기반 대략적인 위치 탐지 + 공인 IP/통신사 정보.
+    배포 구조에 따라 서버 IP로 감지될 수 있음. 실패 시 None 반환.
     """
-    # 1차: ipapi.co
+    # 1차: ipapi.co (빠르고 간단)
     try:
         r = requests.get("https://ipapi.co/json", timeout=6)
         if r.ok:
@@ -88,22 +87,40 @@ def detect_location_by_ip():
             country = j.get("country_name")
             lat = j.get("latitude")
             lon = j.get("longitude")
+            ip = j.get("ip")
+            org = j.get("org") or j.get("asn")
             if city and country and lat is not None and lon is not None:
-                return {"name": city, "country": country, "lat": float(lat), "lon": float(lon)}
+                return {
+                    "name": city,
+                    "country": country,
+                    "lat": float(lat),
+                    "lon": float(lon),
+                    "ip": ip,
+                    "org": org,
+                }
     except Exception:
         pass
-    # 2차: ipwho.is
+    # 2차: ipwho.is (백업)
     try:
         r = requests.get("https://ipwho.is/", timeout=6)
         if r.ok:
             j = r.json()
             if j.get("success"):
-                city = j["city"]
-                country = j["country"]
-                lat = j["latitude"]
-                lon = j["longitude"]
+                city = j.get("city")
+                country = j.get("country")
+                lat = j.get("latitude")
+                lon = j.get("longitude")
+                ip = j.get("ip")
+                org = j.get("connection", {}).get("isp")
                 if city and country and lat is not None and lon is not None:
-                    return {"name": city, "country": country, "lat": float(lat), "lon": float(lon)}
+                    return {
+                        "name": city,
+                        "country": country,
+                        "lat": float(lat),
+                        "lon": float(lon),
+                        "ip": ip,
+                        "org": org,
+                    }
     except Exception:
         pass
     return None
@@ -114,24 +131,58 @@ def detect_location_by_ip():
 st.set_page_config(page_title="Chatbot for YJ", page_icon="💬", layout="centered")
 
 # ---------------------------
-# 상단 바: 위치 표시 + API 키 입력
+# 상단: 위치(공인 IP 표시) + 위치 입력 + API 키 입력
 # ---------------------------
 top = st.container()
 with top:
-    c1, c2 = st.columns([2, 2])
+    c1, c2 = st.columns([3, 2])
 
     with c1:
         st.caption("현재 위치(추정)")
-        if "geo" not in st.session_state or st.button("위치 새로고침", help="IP 기준 위치 재탐지"):
+        # 최초/새로고침 시 IP 기반 위치 탐지
+        refresh_loc = st.button("위치 새로고침", help="IP 기준 위치 재탐지")
+        if "geo" not in st.session_state or refresh_loc:
             st.session_state.geo = detect_location_by_ip()
 
+        # 추정 위치 표시 + 공인 IP
         if st.session_state.get("geo"):
             geo = st.session_state["geo"]
-            st.markdown(f"**{geo['name']}, {geo['country']}**")
+            line1 = f"**{geo['name']}, {geo['country']}**"
+            ip = geo.get("ip")
+            org = geo.get("org")
+            if ip:
+                line1 += f" &nbsp; · &nbsp; 공인 IP: `{ip}`"
+            if org:
+                line1 += f" &nbsp; · &nbsp; 통신사: {org}"
+            st.markdown(line1, unsafe_allow_html=True)
         else:
+            # 기본값(서울)로 세팅
+            st.session_state.geo = {
+                "name": "서울",
+                "country": "대한민국",
+                "lat": 37.5665,
+                "lon": 126.9780,
+                "ip": None,
+                "org": None,
+            }
             st.markdown("**서울, 대한민국** *(기본값)*")
-            # 기본값(서울) 좌표를 세팅해 두면 이후 날씨 아이콘 계산에 사용 가능
-            st.session_state.geo = {"name": "서울", "country": "대한민국", "lat": 37.5665, "lon": 126.9780}
+
+        # 위치 직접 입력 → 적용
+        manual_loc = st.text_input(
+            "위치 직접 입력 (예: 서울, Busan, Tokyo, New York)",
+            value=st.session_state.geo.get("name", "서울"),
+        )
+        apply_manual = st.button("위치 적용")
+        if apply_manual and manual_loc.strip():
+            g = geocode_city(manual_loc.strip())
+            if g:
+                # 기존 IP/통신사 정보는 유지
+                st.session_state.geo.update(
+                    {"name": g["name"], "country": g["country"], "lat": g["lat"], "lon": g["lon"]}
+                )
+                st.success(f"위치를 '{g['name']}, {g['country']}'(으)로 적용했어요.")
+            else:
+                st.warning("위치를 찾지 못했습니다. 철자나 도시명을 다시 확인해 주세요.")
 
     with c2:
         st.caption("OpenAI API Key")
@@ -150,7 +201,7 @@ if geo:
         icon = weather_icon(wx["weather_code"], wx["is_day"])
 
 # ---------------------------
-# 제목 (설명 문구 제거, 제목만 표시)
+# 제목 (설명 문구 없이 제목만)
 # ---------------------------
 st.title(f"{icon} Chatbot for YJ")
 
