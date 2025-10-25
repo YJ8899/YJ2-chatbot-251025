@@ -3,7 +3,7 @@ from openai import OpenAI
 import requests
 
 # ---------------------------
-# 날씨 유틸 함수
+# 유틸: 지오코딩/날씨/아이콘
 # ---------------------------
 def geocode_city(name: str):
     """Open-Meteo 지오코딩 API로 도시명을 위/경도로 변환"""
@@ -70,39 +70,94 @@ def weather_icon(code: int | None, is_day: int | None):
     return "🌦️"
 
 # ---------------------------
+# 유틸: IP 기반 위치 탐지
+# ---------------------------
+@st.cache_data(show_spinner=False, ttl=60 * 30)
+def detect_location_by_ip():
+    """
+    클라이언트 IP 기반 대략적인 위치 탐지.
+    주의: 배포 환경에 따라 서버 IP로 감지될 수 있음.
+    실패 시 None 반환.
+    """
+    # 1차: ipapi.co
+    try:
+        r = requests.get("https://ipapi.co/json", timeout=6)
+        if r.ok:
+            j = r.json()
+            city = j.get("city")
+            country = j.get("country_name")
+            lat = j.get("latitude")
+            lon = j.get("longitude")
+            if city and country and lat is not None and lon is not None:
+                return {"name": city, "country": country, "lat": float(lat), "lon": float(lon)}
+    except Exception:
+        pass
+    # 2차: ipwho.is
+    try:
+        r = requests.get("https://ipwho.is/", timeout=6)
+        if r.ok:
+            j = r.json()
+            if j.get("success"):
+                city = j["city"]
+                country = j["country"]
+                lat = j["latitude"]
+                lon = j["longitude"]
+                if city and country and lat is not None and lon is not None:
+                    return {"name": city, "country": country, "lat": float(lat), "lon": float(lon)}
+    except Exception:
+        pass
+    return None
+
+# ---------------------------
 # 페이지 설정
 # ---------------------------
 st.set_page_config(page_title="Chatbot for YJ", page_icon="💬", layout="centered")
 
 # ---------------------------
-# 사이드바: 위치 & API 키 입력
+# 상단 바: 위치 표시 + API 키 입력
 # ---------------------------
-with st.sidebar:
-    st.header("🌍 위치 설정")
-    city_input = st.text_input("도시 이름", value="서울", help="예: 서울, Busan, Tokyo, New York")
+top = st.container()
+with top:
+    c1, c2 = st.columns([2, 2])
 
-    st.divider()
-    st.header("🔑 OpenAI API Key")
-    openai_api_key = st.text_input("API 키 입력", type="password", help="키는 platform.openai.com에서 발급")
+    with c1:
+        st.caption("현재 위치(추정)")
+        if "geo" not in st.session_state or st.button("위치 새로고침", help="IP 기준 위치 재탐지"):
+            st.session_state.geo = detect_location_by_ip()
 
-# 위치 → 날씨 조회 (아이콘만 사용)
-icon = "💬"  # 기본 아이콘(조회 실패 대비)
-geo = geocode_city(city_input.strip()) if city_input.strip() else None
+        if st.session_state.get("geo"):
+            geo = st.session_state["geo"]
+            st.markdown(f"**{geo['name']}, {geo['country']}**")
+        else:
+            st.markdown("**서울, 대한민국** *(기본값)*")
+            # 기본값(서울) 좌표를 세팅해 두면 이후 날씨 아이콘 계산에 사용 가능
+            st.session_state.geo = {"name": "서울", "country": "대한민국", "lat": 37.5665, "lon": 126.9780}
+
+    with c2:
+        st.caption("OpenAI API Key")
+        openai_api_key = st.text_input("🔑 API 키 입력", type="password", label_visibility="collapsed")
+        if not openai_api_key:
+            st.info("OpenAI API 키를 상단 입력란에 입력해 주세요.", icon="🗝️")
+
+# ---------------------------
+# 위치 → 날씨 아이콘 계산
+# ---------------------------
+geo = st.session_state.get("geo")
+icon = "💬"
 if geo:
     wx = fetch_current_weather(geo["lat"], geo["lon"])
     if wx:
         icon = weather_icon(wx["weather_code"], wx["is_day"])
 
 # ---------------------------
-# 제목 (설명 문구 제거, 제목만 변경)
+# 제목 (설명 문구 제거, 제목만 표시)
 # ---------------------------
 st.title(f"{icon} Chatbot for YJ")
 
 # ---------------------------
-# OpenAI 키 확인
+# API 키 확인
 # ---------------------------
 if not openai_api_key:
-    st.info("왼쪽 사이드바에서 OpenAI API 키를 입력해 주세요.", icon="🗝️")
     st.stop()
 
 # ---------------------------
@@ -128,7 +183,7 @@ if prompt := st.chat_input("무엇이 궁금하세요?"):
 
     # OpenAI 응답 스트리밍
     stream = client.chat.completions.create(
-        model="gpt-3.5-turbo",  # 필요시 최신 모델로 교체 가능
+        model="gpt-3.5-turbo",  # 필요시 최신 모델명으로 교체 가능 (예: "gpt-4o-mini")
         messages=[
             {"role": m["role"], "content": m["content"]}
             for m in st.session_state.messages
