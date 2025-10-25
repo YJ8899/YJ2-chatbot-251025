@@ -51,7 +51,6 @@ def weather_icon(code: int | None, is_day: int | None):
     if code is None:
         return "🌐"  # 알 수 없음
     day = (is_day == 1)
-    # 참고: https://open-meteo.com/en/docs
     if code == 0:  # Clear
         return "☀️" if day else "🌙"
     if code in (1, 2):  # Mainly clear, partly cloudy
@@ -71,79 +70,73 @@ def weather_icon(code: int | None, is_day: int | None):
     return "🌦️"
 
 # ---------------------------
-# 페이지/사이드바 구성
+# 페이지 설정
 # ---------------------------
-st.set_page_config(page_title="Chatbot", page_icon="💬", layout="centered")
+st.set_page_config(page_title="Chatbot for YJ", page_icon="💬", layout="centered")
 
+# ---------------------------
+# 사이드바: 위치 & API 키 입력
+# ---------------------------
 with st.sidebar:
     st.header("🌍 위치 설정")
     city_input = st.text_input("도시 이름", value="서울", help="예: 서울, Busan, Tokyo, New York")
-    st.caption("도시를 바꾸면 제목 아이콘이 현재 날씨에 맞게 변합니다.")
 
-# 위치 → 날씨 조회
+    st.divider()
+    st.header("🔑 OpenAI API Key")
+    openai_api_key = st.text_input("API 키 입력", type="password", help="키는 platform.openai.com에서 발급")
+
+# 위치 → 날씨 조회 (아이콘만 사용)
 icon = "💬"  # 기본 아이콘(조회 실패 대비)
-subtitle = ""
 geo = geocode_city(city_input.strip()) if city_input.strip() else None
 if geo:
     wx = fetch_current_weather(geo["lat"], geo["lon"])
     if wx:
         icon = weather_icon(wx["weather_code"], wx["is_day"])
-        loc_label = f'{geo["name"]}, {geo["country"]}'
-        temp = wx.get("temperature_2m")
-        if temp is not None:
-            subtitle = f"({loc_label} · 현재 {temp:.1f}°C)"
-        else:
-            subtitle = f"({loc_label})"
 
 # ---------------------------
-# 제목 + 설명 (날씨 아이콘 반영)
+# 제목 (설명 문구 제거, 제목만 변경)
 # ---------------------------
-st.title(f"{icon} Chatbot")
-st.write(
-    "이 앱은 OpenAI의 GPT 모델을 사용한 간단한 챗봇입니다. "
-    "사용하려면 OpenAI API 키가 필요합니다. "
-    "키는 [여기](https://platform.openai.com/account/api-keys)에서 발급받을 수 있습니다. "
-    "앱 만드는 방법은 [튜토리얼](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)을 참고하세요. "
-    + (f"\n\n**오늘의 날씨** {subtitle}" if subtitle else "")
-)
+st.title(f"{icon} Chatbot for YJ")
 
 # ---------------------------
-# OpenAI 키 입력 및 채팅 본문
+# OpenAI 키 확인
 # ---------------------------
-openai_api_key = st.text_input("OpenAI API Key", type="password")
 if not openai_api_key:
-    st.info("계속하려면 OpenAI API 키를 입력해 주세요.", icon="🗝️")
-else:
-    # OpenAI 클라이언트 생성
-    client = OpenAI(api_key=openai_api_key)
+    st.info("왼쪽 사이드바에서 OpenAI API 키를 입력해 주세요.", icon="🗝️")
+    st.stop()
 
-    # 세션 상태로 대화 이력 유지
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+# ---------------------------
+# OpenAI 클라이언트 생성 및 채팅 본문
+# ---------------------------
+client = OpenAI(api_key=openai_api_key)
 
-    # 기존 대화 출력
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+# 세션 상태로 대화 이력 유지
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    # 채팅 입력
-    if prompt := st.chat_input("무엇이 궁금하세요?"):   
-        # 사용자 메시지 저장/표시
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+# 기존 대화 출력
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-        # OpenAI 응답 스트리밍
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",  # 필요시 최신 모델명으로 교체 가능
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
-        )
+# 채팅 입력
+if prompt := st.chat_input("무엇이 궁금하세요?"):
+    # 사용자 메시지 저장/표시
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-        # 스트리밍 출력 및 세션 저장
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+    # OpenAI 응답 스트리밍
+    stream = client.chat.completions.create(
+        model="gpt-3.5-turbo",  # 필요시 최신 모델로 교체 가능
+        messages=[
+            {"role": m["role"], "content": m["content"]}
+            for m in st.session_state.messages
+        ],
+        stream=True,
+    )
+
+    # 스트리밍 출력 및 세션 저장
+    with st.chat_message("assistant"):
+        response = st.write_stream(stream)
+    st.session_state.messages.append({"role": "assistant", "content": response})
